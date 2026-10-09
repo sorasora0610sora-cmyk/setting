@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "p=$(command -v python3 || command -v python) && \"$p\" \"$CLAUDE_PROJECT_DIR/.claude/docs-index.py\" session-start; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

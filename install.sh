@@ -11,6 +11,9 @@
 #   --global   ~/.claude/CLAUDE.md にも配置する(このマシンの全プロジェクトに効く)
 #              あわせて claude/agents/*.md を ~/.claude/agents/ へ配置する
 #              (サブエージェント定義はユーザー単位でしか効かないため --global 時のみ)
+#   --repo <dir>  起動時の資料提案(claude/docs-index/)をそのリポジトリへ入れる
+#              <dir>/.claude/docs-index.py を配置し、<dir>/.claude/settings.json が無ければ
+#              SessionStart フック付きで作る(あれば書き換えず、足すべき内容を表示する)。複数指定可
 #   --check    配置せず、現状との差分だけ表示する
 #   --help
 #
@@ -25,18 +28,27 @@ TARGET_SRC="$PARENT_DIR/CLAUDE.md"
 TARGET_GLOBAL="$HOME/.claude/CLAUDE.md"
 AGENTS_SRC_DIR="$REPO_DIR/claude/agents"
 AGENTS_TARGET_DIR="$HOME/.claude/agents"
+DOCS_PY="$REPO_DIR/claude/docs-index/docs-index.py"
+DOCS_HOOK="$REPO_DIR/claude/docs-index/settings.hook.json"
 
 DO_GLOBAL=0
 DO_CHECK=0
-for a in "$@"; do
-  case "$a" in
+REPOS=""          # --repo の指定先(改行区切り。空配列を使わないのは bash 3.2 / set -u 対策)
+while [ $# -gt 0 ]; do
+  case "$1" in
     --global) DO_GLOBAL=1 ;;
     --check)  DO_CHECK=1 ;;
+    --repo)
+      [ $# -ge 2 ] || { echo "--repo にはディレクトリを指定してください" >&2; exit 2; }
+      REPOS="$REPOS
+$2"
+      shift ;;
     --help|-h)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) echo "不明な引数: $a (--help)" >&2; exit 2 ;;
+    *) echo "不明な引数: $1 (--help)" >&2; exit 2 ;;
   esac
+  shift
 done
 
 if [ ! -f "$SRC_CANON" ]; then
@@ -45,11 +57,13 @@ if [ ! -f "$SRC_CANON" ]; then
 fi
 
 # --- 配置先ごとの処理 ---------------------------------------------------
-# place <正本> <配置先> <ラベル>
+# place <正本> <配置先> <ラベル> [nobak]
+#   nobak … 配置先がそのリポジトリの git 管理下にあり、旧版を履歴から戻せるもの(.bak を散らかさない)
 place() {
   src=$1
   target=$2
   label=$3
+  nobak=${4:-}
   dir=$(dirname -- "$target")
 
   if [ ! -d "$dir" ]; then
@@ -71,9 +85,13 @@ place() {
       diff -u -- "$target" "$src" | head -40 || true
       return 0
     fi
-    bak="$target.bak-$(date +%Y%m%d-%H%M%S)"
-    cp -- "$target" "$bak"
-    echo "  [$label] 既存を退避 → $bak"
+    if [ -n "$nobak" ]; then
+      echo "  [$label] 正本と差分あり → 上書きします(旧版は配置先リポジトリの git 履歴にある)"
+    else
+      bak="$target.bak-$(date +%Y%m%d-%H%M%S)"
+      cp -- "$target" "$bak"
+      echo "  [$label] 既存を退避 → $bak"
+    fi
   else
     if [ "$DO_CHECK" -eq 1 ]; then
       echo "  [$label] 未配置  $target"
@@ -94,6 +112,52 @@ if [ "$DO_GLOBAL" -eq 1 ]; then
     [ -f "$f" ] || continue
     place "$f" "$AGENTS_TARGET_DIR/$(basename -- "$f")" "agent"
   done
+fi
+
+# --- 起動時の資料提案(docs-index)をリポジトリへ ------------------------
+# place_hook <リポジトリ>
+place_hook() {
+  settings="$1/.claude/settings.json"
+  if [ -f "$settings" ]; then
+    if grep -q "docs-index.py" "$settings"; then
+      echo "  [hook] 設定済み  $settings"
+    else
+      echo "  [hook] ⚠️ 既存の settings.json があるため書き換えません。次の SessionStart を手で足してください:"
+      echo "         $settings  ←  $DOCS_HOOK"
+    fi
+    return 0
+  fi
+  if [ "$DO_CHECK" -eq 1 ]; then
+    echo "  [hook] 未配置  $settings"
+    return 0
+  fi
+  cp -- "$DOCS_HOOK" "$settings"
+  echo "  [hook] 作成しました  $settings"
+}
+
+if [ -n "$REPOS" ]; then
+  echo "資料提案(docs-index):"
+  # 改行区切りの一覧を 1 行ずつ処理する(パスに空白があっても切れないよう IFS を改行にする)
+  OLD_IFS=$IFS
+  IFS='
+'
+  for r in $REPOS; do
+    IFS=$OLD_IFS
+    [ -n "$r" ] || continue
+    if [ ! -d "$r" ]; then
+      echo "  ⚠️ ディレクトリがありません: $r"
+      continue
+    fi
+    r=$(CDPATH= cd -- "$r" && pwd)
+    echo " $r"
+    place "$DOCS_PY" "$r/.claude/docs-index.py" "docs-index" nobak
+    place_hook "$r"
+  done
+  IFS=$OLD_IFS
+  if [ "$DO_CHECK" -eq 0 ]; then
+    echo "  → 台帳を作る: python3 <repo>/.claude/docs-index.py scan <dir> --write"
+    echo "  → .claude/docs-index.py と .claude/settings.json を commit & push(クラウド・別マシンに届けるため)"
+  fi
 fi
 
 if [ "$DO_CHECK" -eq 0 ]; then

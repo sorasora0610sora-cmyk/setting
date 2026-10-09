@@ -100,3 +100,12 @@
 - `CLAUDE_CODE_SUBAGENT_MODEL` は**設定しない**。general-purpose まで Sonnet になり、§1 の考察エージェントが Opus でなくなる。
 - 単純作業にも **Haiku は使わない**。2026-10-05 の調査で、重複の見落とし・行ズレ・未確認の「削除して安全」が出た。
 - 配置: `Explore.md` の正本は `setting/claude/agents/`。`./install.sh --global` で `~/.claude/agents/` に入る。
+
+## 7. 起動時の資料提案(資料台帳 `DOCS.md`)
+
+**2026-10-09 導入。** 仕組みと手順の正本は `setting/claude/docs-index/README.md`。
+
+- 台帳 `DOCS.md`(asunaro-ops は `ws-*/DOCS.md`、他はリポジトリ直下)があるプロジェクトでは、**作業対象とやる作業が決まった時点で**、関連資料を最大 4 件、要約付きで「どの資料をブラウザで開きますか？」と提案する(`.claude/docs-index.py list` → `open`)。資料と関係しない作業では提案しない。
+- **資料を作成・改版したら台帳も更新する**(`scan --write` → 要約 → `stamp`)。要約(資料を読む作業)は §6 どおり Sonnet に。
+- 起動時の案内は各リポジトリの `.claude/settings.json` の SessionStart フックが入れる。**この CLAUDE.md はクラウドセッションに届かない**ため、手順の本体はフックの出力側に置いてある。
+- 別リポジトリへの導入: `./install.sh --repo <dir>`。正本(`docs-index.py`)を直したら同じコマンドで配り直す。
