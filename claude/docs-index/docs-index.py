@@ -12,6 +12,7 @@
   python3 .claude/docs-index.py list  <dir>                        提案用の一覧 (この環境で開けるか付き)
   python3 .claude/docs-index.py open  <dir> <番号>...               ブラウザ / 既定アプリで開く (クラウドはリンク表示)
   python3 .claude/docs-index.py stamp <dir> <番号 or 場所>...       要約を書いた資料の指紋・更新日を記録
+  python3 .claude/docs-index.py drop  <dir> <番号 or 場所>... [--reason 理由]  節を消して対象外に登録 (次の scan で戻らない)
   python3 .claude/docs-index.py guide                              台帳の書き方 (要約担当向け)
   python3 .claude/docs-index.py session-start                      SessionStart フック (stdin = フック JSON)
 
@@ -50,7 +51,8 @@ DOC_EXT = {
 GOOGLE_NATIVE = {".gdoc": "document", ".gsheet": "spreadsheets", ".gslides": "presentation"}
 # 資料ではないフォルダ (生成物・旧版・データの元ファイル)。名前は小文字で照合する
 SKIP_DIRS = {"node_modules", "venv", "__pycache__", "dist", "build", "test-results",
-             "htmlcov", "worktrees", "archives", "old", "_old", "sources", "raw", "data", "db"}
+             "htmlcov", "worktrees", "archives", "old", "_old", "sources", "raw", "data", "db",
+             "_deprecated", "deprecated"}
 SKIP_DIR_PREFIX = ("_退避", "_to_delete", "_archive", "_旧")
 SKIP_DIR_SUFFIX = ("_old", "-old", " old", "_db")
 COPY_RE = re.compile(r"( - コピー| のコピー|^コピー|^Copy of | - Copy\b)", re.I)
@@ -783,6 +785,36 @@ def cmd_open(d: Path, keys):
             print("✖ 開けない: {} ({})".format(e.title, ex))
 
 
+def glob_escape(s: str) -> str:
+    return "".join("[{}]".format(c) if c in "*?[]" else c for c in s)
+
+
+def cmd_drop(d: Path, keys, reason: str):
+    """節を消し、同じ場所が次の scan で戻ってこないよう「## 対象外」に登録する。"""
+    led = Ledger(d)
+    if not led.exists:
+        sys.exit("資料台帳がありません: " + led.path.as_posix())
+    targets = pick(led, keys)
+    if not targets:
+        sys.exit("消す節がありません")
+    starts = [e.line for e in led.entries] + [led.ex_line if led.ex_line is not None else len(led.lines)]
+    spans = []
+    for e in targets:
+        nxt = min(s for s in starts if s > e.line)
+        spans.append((e.line, nxt, e))
+    for a, b, _ in sorted(spans, key=lambda x: x[0], reverse=True):
+        del led.lines[a:b]
+    if not any(l.startswith("## 対象外") for l in led.lines):
+        led.lines += ["", "## 対象外", ""]
+    while led.lines and not led.lines[-1].strip():
+        led.lines.pop()
+    for _, _, e in spans:
+        led.lines.append("- `{}` — {}".format(glob_escape(e.loc), reason or "資料ではない"))
+        print("消した: {} — {}".format(e.title, e.loc))
+    led.save()
+    print("対象外に登録: {} 件 → {}".format(len(spans), led.path.as_posix()))
+
+
 def cmd_stamp(d: Path, keys):
     led = Ledger(d)
     if not led.exists:
@@ -827,9 +859,11 @@ GUIDE = """# 資料台帳(DOCS.md)の書き方 — 要約担当向け
 2. `{cmd} scan <dir> --write` で未登録の資料の枠を新しい順に追加する(新版は既存の節の場所を差し替える)。
 3. 「要約待ち」「変更あり」の資料を 1 つずつ開いて読み、見出し・関連・要約を書く。
    - 読めなかったら 要約: (読めず: 理由) と書く。要約しないで済ませない。
-   - 資料ではないもの(ログ・中間生成物・テンプレの写し・送付状の下書き等)は節ごと消し、
-     「## 対象外」に `- \\`パターン\\` — 理由` を足す(次の scan で戻ってこないように)。
-   - 同じ資料の別形式(同名の .html と .pdf 等)は 1 節にまとめ、もう一方は対象外へ。
+   - 資料ではないもの(ログ・中間生成物・テンプレの写し・送付状の下書き等)は
+     `{cmd} drop <dir> <番号>... --reason "理由"` で消す(「## 対象外」に登録され、次の scan で戻ってこない)。
+     フォルダごと外すなら「## 対象外」に `- \\`パターン\\` — 理由` を手で足す。
+   - 同じ資料の別形式(同名の .html と .pdf 等)・同じ中身の複製は 1 節だけ残し、残りは drop する。
+     要約担当(Sonnet)は消さずに候補として報告し、判断はメイン側が行う。
 4. 書いた資料ごとに `{cmd} stamp <dir> <番号 or 場所>...` で指紋を記録する(記録しないと次回も要約待ちに出る)。
 5. Drive / Notion(`外部収集:` が空か 7 日以上前のとき。コネクタがある環境だけ):
    - Google Drive コネクタで `検索語:` の各語を検索し、作業に使う資料を `場所: https://...` の節で足す。
@@ -944,6 +978,10 @@ def main(argv):
         return cmd_open(d, args)
     if cmd == "stamp":
         return cmd_stamp(d, args)
+    if cmd == "drop":
+        reason = args[args.index("--reason") + 1] if "--reason" in args else ""
+        keys = [a for i, a in enumerate(args) if a != "--reason" and (i == 0 or args[i - 1] != "--reason")]
+        return cmd_drop(d, keys, reason)
     sys.exit("不明なコマンド: {} (--help)".format(cmd))
 
 
