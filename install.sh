@@ -9,6 +9,8 @@
 # src/ 配下のどのリポジトリで起動しても効きます。
 #
 #   --global   ~/.claude/CLAUDE.md にも配置する(このマシンの全プロジェクトに効く)
+#              あわせて claude/agents/*.md を ~/.claude/agents/ へ配置する
+#              (サブエージェント定義はユーザー単位でしか効かないため --global 時のみ)
 #   --check    配置せず、現状との差分だけ表示する
 #   --help
 #
@@ -21,6 +23,8 @@ SRC_CANON="$REPO_DIR/claude/CLAUDE.md"
 PARENT_DIR=$(dirname -- "$REPO_DIR")          # = src/
 TARGET_SRC="$PARENT_DIR/CLAUDE.md"
 TARGET_GLOBAL="$HOME/.claude/CLAUDE.md"
+AGENTS_SRC_DIR="$REPO_DIR/claude/agents"
+AGENTS_TARGET_DIR="$HOME/.claude/agents"
 
 DO_GLOBAL=0
 DO_CHECK=0
@@ -41,9 +45,11 @@ if [ ! -f "$SRC_CANON" ]; then
 fi
 
 # --- 配置先ごとの処理 ---------------------------------------------------
+# place <正本> <配置先> <ラベル>
 place() {
-  target=$1
-  label=$2
+  src=$1
+  target=$2
+  label=$3
   dir=$(dirname -- "$target")
 
   if [ ! -d "$dir" ]; then
@@ -55,14 +61,14 @@ place() {
   fi
 
   if [ -f "$target" ]; then
-    if cmp -s -- "$SRC_CANON" "$target"; then
+    if cmp -s -- "$src" "$target"; then
       echo "  [$label] 一致 (更新不要)  $target"
       return 0
     fi
     # 正本と違う = 手で直された可能性。上書き前に必ず控えを取る。
     if [ "$DO_CHECK" -eq 1 ]; then
       echo "  [$label] ⚠️ 差分あり  $target"
-      diff -u -- "$target" "$SRC_CANON" | head -40 || true
+      diff -u -- "$target" "$src" | head -40 || true
       return 0
     fi
     bak="$target.bak-$(date +%Y%m%d-%H%M%S)"
@@ -75,20 +81,26 @@ place() {
     fi
   fi
 
-  cp -- "$SRC_CANON" "$target"
+  cp -- "$src" "$target"
   echo "  [$label] 配置しました  $target"
 }
 
 echo "正本: $SRC_CANON"
 echo "配置先:"
-place "$TARGET_SRC" "src"
-[ "$DO_GLOBAL" -eq 1 ] && place "$TARGET_GLOBAL" "global"
+place "$SRC_CANON" "$TARGET_SRC" "src"
+if [ "$DO_GLOBAL" -eq 1 ]; then
+  place "$SRC_CANON" "$TARGET_GLOBAL" "global"
+  for f in "$AGENTS_SRC_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    place "$f" "$AGENTS_TARGET_DIR/$(basename -- "$f")" "agent"
+  done
+fi
 
 if [ "$DO_CHECK" -eq 0 ]; then
   echo
   echo "確認:"
   echo "  ls -l \"$TARGET_SRC\""
-  [ "$DO_GLOBAL" -eq 1 ] && echo "  ls -l \"$TARGET_GLOBAL\""
+  [ "$DO_GLOBAL" -eq 1 ] && echo "  ls -l \"$TARGET_GLOBAL\" \"$AGENTS_TARGET_DIR\""
   echo
   echo "⚠️ 配置先はコピーです。内容を直すときは正本 ($SRC_CANON) を直して"
   echo "   git commit && git push してから、各マシンで git pull && ./install.sh を実行してください。"
